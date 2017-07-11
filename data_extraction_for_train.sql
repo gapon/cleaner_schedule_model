@@ -16,10 +16,10 @@ create temp table master_orders as
 
 with constants as (
 	select
-		'2017-04-01'::date as start_date,
-		'2017-06-30'::date as end_date
-		--'2017-07-01'::date as start_date,
-		--'2017-07-10'::date as end_date
+		--'2017-04-01'::date as start_date,
+		--'2017-06-30'::date as end_date
+		'2017-07-01'::date as start_date,
+		'2017-07-10'::date as end_date
 ), dates as (
 	select
 		date(d) as date
@@ -89,6 +89,21 @@ with constants as (
 	where obs.obs_date is not null -- хз, как так
 	group by 1 ,2, 3, 4
 	order by 3, 2
+), manual_schedules as (
+	select
+		cleaner_id as master_id,
+		date,
+		busy_morning,
+		busy_afternoon
+	from cleaner_schedules
+	where date >= (select start_date from constants) 
+		and date < (select end_date from constants)
 )
 
-select * from master_dow_orders;
+select 
+	o.*,
+	case when s.busy_morning then 1 else 0 end as busy_morning,
+	case when s.busy_afternoon then 1 else 0 end as busy_afternoon,
+	case when s.date is null then 1 else 0 end as no_schedule
+from master_dow_orders o
+	left join manual_schedules s on (o.master_id = s.master_id and o.dow = extract(dow from s.date));
