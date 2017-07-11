@@ -58,7 +58,7 @@ with constants as (
 		least((case when last_order_at < blocked_at then date(blocked_at) end), (select end_date from constants)) as period_end_date	
 	from master_first_last_orders o
 		left join master_blockings b on (o.master_id = b.master_id)
-	--where o.master_id in (121794, 152851) -- DEBUG
+	-- where o.master_id in (121794, 152851) -- DEBUG
 ), observations as (
 	select
 		master_id,
@@ -87,6 +87,7 @@ with constants as (
 		left join master_orders o1 on (obs.master_id = o1.master_id and obs.obs_date = date(o1.start_at))
 		left join master_orders o2 on (obs.master_id = o2.master_id and date(o2.start_at) < date(obs.obs_date))
 	where obs.obs_date is not null -- хз, как так
+		--and obs.master_id = 144390 -- DEBUG
 	group by 1 ,2, 3, 4
 	order by 3, 2
 ), manual_schedules as (
@@ -98,12 +99,82 @@ with constants as (
 	from cleaner_schedules
 	where date >= (select start_date from constants) 
 		and date < (select end_date from constants)
+), master_info as (
+	select
+		m.id as master_id,
+		
+		extract(year from current_date) - extract(year from birthday) as age,
+		case
+			when citizenship ilike '%рф%' then 1
+			when citizenship ilike '%россия%' then 1
+			when citizenship ilike '%федерац%' then 1
+			when citizenship = 'russia' then 1
+			else 0
+		end as rus_flg,
+		case
+			when citizenship ilike '%украи%' then 1
+			when citizenship ilike '%ukra%' then 1
+			else 0
+		end as ukr_flg,
+		case
+			when citizenship ilike '%бела%' then 1
+			when citizenship = 'belarus' then 1
+			else 0
+		end as blr_flg,
+		case
+			when citizenship ilike '%молд%' then 1
+			when citizenship = 'moldova' then 1
+			else 0
+		end as mol_flg,
+		case
+			when citizenship ilike '%узбек%' then 1
+			when citizenship = 'kyrgyzia' then 1
+			else 0
+		end as asia_flg,
+		rating,
+		whitelists_count,
+		blacklists_count,
+		
+		case when m.cleaner_type = 'lite' then 1 else 0 end as lite,
+		case when m.cleaner_type = 'basic' then 1 else 0 end as basic,
+	
+		case when m.region_id = 1 then 1 else 0 end as msk,
+		case when m.region_id = 2 then 1 else 0 end as spb,
+		case when m.region_id = 4 then 1 else 0 end as ekb,
+		
+		lat,
+		lng
+		
+	from masters m
+		left join addresses a on (m.user_id = a.user_id)
+	where m.id in (select distinct master_id from master_orders)
+
 )
 
 select 
 	o.*,
 	case when s.busy_morning then 1 else 0 end as busy_morning,
 	case when s.busy_afternoon then 1 else 0 end as busy_afternoon,
-	case when s.date is null then 1 else 0 end as no_schedule
+	case when s.date is null then 1 else 0 end as no_schedule,
+	
+	i.age,
+	i.rus_flg,
+	i.ukr_flg,
+	i.blr_flg,
+	i.mol_flg,
+	i.asia_flg,
+	i.rating,
+	i.whitelists_count,
+	i.blacklists_count,
+	i.lite,
+	i.basic,
+	i.msk,
+	i.spb,
+	i.ekb,
+	i.lat,
+	i.lng
+	
+	
 from master_dow_orders o
-	left join manual_schedules s on (o.master_id = s.master_id and o.dow = extract(dow from s.date));
+	left join manual_schedules s on (o.master_id = s.master_id and o.obs_date = s.date)
+	left join master_info i on (o.master_id = i.master_id);
