@@ -1,0 +1,158 @@
+-- это для test
+drop table if exists master_orders;
+create temp table master_orders as 
+	select distinct
+		p.cleaner_id as master_id,
+		o.id as order_id,
+		o.start_at,
+		extract(dow from o.start_at) as dow
+	from orders o
+		left join performers p on (o.id = p.order_id)
+		left join masters m on (p.cleaner_id = m.id)
+	where o.deal_id is null -- тут учитываются только уборки
+		and workflow_state = 'paid'
+		and p.cleaner_id not in (72192,12438,53705,48852)
+		and m.block_reason_id is null
+		and new_skill !='lead';
+
+
+with constants as (
+	select
+		current_date as start_date,
+		current_date + 7 as end_date
+), dates as (
+	select
+		date(d) as date
+	from generate_series((select start_date from constants),(select end_date from constants), interval '1 day') d
+), master_first_last_orders as (
+	select 
+		master_id,
+		min(start_at) as first_order_at,
+		max(start_at) as last_order_at
+	from master_orders
+	group by 1
+), master_orders_info as (
+	select 
+		*,
+		(select start_date from constants) as period_start_date,
+		(select end_date from constants) as period_end_date	
+	from master_first_last_orders
+), observations as (
+	select
+		master_id,
+		date as obs_date
+	from master_orders_info m
+		left join dates d on (d.date >= m.period_start_date and d.date < m.period_end_date)
+), master_dow_orders as (
+	select 
+		obs.master_id,
+		obs.obs_date,
+		extract(dow from obs.obs_date) as dow,
+		case when o1.master_id is not null then 1 else 0 end as worked,
+		count(distinct o2.order_id) as all_orders,
+		count(distinct o2.order_id) filter (where date(o2.start_at) >= obs.obs_date - 7) as orders_1w,
+		count(distinct o2.order_id) filter (where date(o2.start_at) >= obs.obs_date - 14) as orders_2w,
+		count(distinct o2.order_id) filter (where date(o2.start_at) >= obs.obs_date - 21) as orders_3w,
+		count(distinct o2.order_id) filter (where date(o2.start_at) >= obs.obs_date - 28) as orders_4w,
+		count(distinct o2.order_id) filter (where date(o2.start_at) >= obs.obs_date - 60) as orders_2m,
+		count(distinct o2.order_id) filter (where date(o2.start_at) >= obs.obs_date - 90) as orders_3m,
+		obs.obs_date - max(date(o2.start_at)) as days_since_last_order, -- null, точно не 0, -999
+		count(distinct o2.order_id) filter (where extract(dow from obs.obs_date) = o2.dow) as dow_orders,
+		count(distinct date(o2.start_at)) filter (where extract(dow from obs.obs_date) = o2.dow) as dow_worked,
+		obs.obs_date - max(date(o2.start_at)) filter (where extract(dow from obs.obs_date) = o2.dow) as days_since_last_dow_order -- null может -999, может и 0 подойдет
+		-- это поле кратно 7, поэтому можно на 7 разделить
+	from observations obs
+		left join master_orders o1 on (obs.master_id = o1.master_id and obs.obs_date = date(o1.start_at))
+		left join master_orders o2 on (obs.master_id = o2.master_id and date(o2.start_at) < date(obs.obs_date))
+	where obs.obs_date is not null -- хз, как так
+		--and obs.master_id = 144390 -- DEBUG
+	group by 1 ,2, 3, 4
+	order by 3, 2
+), manual_schedules as (
+	select
+		cleaner_id as master_id,
+		date,
+		busy_morning,
+		busy_afternoon
+	from cleaner_schedules
+	where date >= (select start_date from constants) 
+		and date < (select end_date from constants)
+), master_info as (
+	select
+		m.id as master_id,
+		
+		extract(year from current_date) - extract(year from birthday) as age,
+		case
+			when citizenship ilike '%рф%' then 1
+			when citizenship ilike '%россия%' then 1
+			when citizenship ilike '%федерац%' then 1
+			when citizenship = 'russia' then 1
+			else 0
+		end as rus_flg,
+		case
+			when citizenship ilike '%украи%' then 1
+			when citizenship ilike '%ukra%' then 1
+			else 0
+		end as ukr_flg,
+		case
+			when citizenship ilike '%бела%' then 1
+			when citizenship = 'belarus' then 1
+			else 0
+		end as blr_flg,
+		case
+			when citizenship ilike '%молд%' then 1
+			when citizenship = 'moldova' then 1
+			else 0
+		end as mol_flg,
+		case
+			when citizenship ilike '%узбек%' then 1
+			when citizenship = 'kyrgyzia' then 1
+			else 0
+		end as asia_flg,
+		rating,
+		whitelists_count,
+		blacklists_count,
+		
+		case when m.cleaner_type = 'lite' then 1 else 0 end as lite,
+		case when m.cleaner_type = 'basic' then 1 else 0 end as basic,
+	
+		case when m.region_id = 1 then 1 else 0 end as msk,
+		case when m.region_id = 2 then 1 else 0 end as spb,
+		case when m.region_id = 4 then 1 else 0 end as ekb,
+		
+		lat,
+		lng
+		
+	from masters m
+		left join addresses a on (m.user_id = a.user_id)
+	where m.id in (select distinct master_id from master_orders)
+
+)
+
+select 
+	o.*,
+	case when s.busy_morning then 1 else 0 end as busy_morning,
+	case when s.busy_afternoon then 1 else 0 end as busy_afternoon,
+	case when s.date is null then 1 else 0 end as no_schedule,
+	
+	i.age,
+	i.rus_flg,
+	i.ukr_flg,
+	i.blr_flg,
+	i.mol_flg,
+	i.asia_flg,
+	i.rating,
+	i.whitelists_count,
+	i.blacklists_count,
+	i.lite,
+	i.basic,
+	i.msk,
+	i.spb,
+	i.ekb,
+	i.lat,
+	i.lng
+	
+	
+from master_dow_orders o
+	left join manual_schedules s on (o.master_id = s.master_id and o.obs_date = s.date)
+	left join master_info i on (o.master_id = i.master_id);
